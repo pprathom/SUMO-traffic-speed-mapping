@@ -1,0 +1,5 @@
+{
+  "name": "SUMO Traffic Speed Mapper",
+  "description": "A professional traffic engineering tool to map GPS probe data to SUMO networks, calculate Space Mean Speed (Harmonic Mean), and classify movements (Left, Through, Right).",
+  "requestFramePermissions": []
+}
