@@ -13,6 +13,8 @@ export interface ProbePoint {
   forHireLight?: number; // 0 or 1
   engineAcc?: number;
   gpsValid: number; // 0 or 1
+  edgeId?: string; // Mapped link ID
+  filterReason?: string; // Reason why point was excluded from calculation
 }
 
 export interface SumoEdge {

@@ -33,18 +33,31 @@ export class TrafficProcessor {
     this.transformer = new CoordinateTransformer(projParameter, netOffset);
   }
 
+  getTransformer(): CoordinateTransformer {
+    return this.transformer;
+  }
+
   /**
    * Processes probe data and maps it to the SUMO network
    */
   process(probeData: ProbePoint[], options: ProcessingOptions): SpeedResult[] {
-    // 1. Filter and clean data
-    const cleanedData = probeData.filter((p) => {
-      if (p.gpsValid < options.minGpsValid) return false;
-      // If onlyTaxisWithPassengers is true, we only keep points where forHireLight is 0
-      if (options.onlyTaxisWithPassengers && p.forHireLight !== 0) return false;
-      if (options.filterStationary && p.speed <= options.stationaryThreshold) return false;
-      return true;
-    });
+    // 1. Tag and filter data
+    const cleanedData: ProbePoint[] = [];
+    for (const p of probeData) {
+      if (p.gpsValid < options.minGpsValid) {
+        (p as any).filterReason = 'Invalid GPS';
+        continue;
+      }
+      if (options.onlyTaxisWithPassengers && p.forHireLight !== 0) {
+        (p as any).filterReason = 'Taxi without passenger';
+        continue;
+      }
+      if (options.filterStationary && p.speed <= options.stationaryThreshold) {
+        (p as any).filterReason = 'Stationary vehicle';
+        continue;
+      }
+      cleanedData.push(p);
+    }
 
     // 2. Map matching
     const vehicleTrajectories: Map<string, { edgeId: string; speed: number; timestamp: number }[]> =
@@ -55,6 +68,7 @@ export class TrafficProcessor {
       const edgeId = this.network.findNearestEdge(x, y, options.radius);
 
       if (edgeId) {
+        p.edgeId = edgeId;
         if (!vehicleTrajectories.has(p.vehicleId)) {
           vehicleTrajectories.set(p.vehicleId, []);
         }

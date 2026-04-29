@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import Papa from 'papaparse';
 import {
   Upload,
@@ -21,6 +21,9 @@ import {
   Cpu,
   Layers,
   Zap,
+  Map as MapIcon,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -39,6 +42,7 @@ import {
 import { SumoNetwork } from './lib/sumo-parser';
 import { TrafficProcessor, ProcessingOptions } from './lib/processor';
 import { ProbePoint, SpeedResult } from './lib/types';
+import MapView from './components/MapView';
 
 /** Utility for Tailwind class merging */
 function cn(...inputs: ClassValue[]) {
@@ -49,10 +53,27 @@ export default function App() {
   // State
   const [probeFiles, setProbeFiles] = useState<File[]>([]);
   const [netFile, setNetFile] = useState<File | null>(null);
+  const [network, setNetwork] = useState<SumoNetwork | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [results, setResults] = useState<SpeedResult[]>([]);
+  const [probePoints, setProbePoints] = useState<ProbePoint[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'table' | 'chart' | 'tti'>('table');
+  const [activeTab, setActiveTab] = useState<'table' | 'chart' | 'tti' | 'map'>('table');
+
+  // Map state
+  const [mapDate, setMapDate] = useState<string>('');
+  const [mapTimeSlot, setMapTimeSlot] = useState<string>('');
+  const [mapMetric, setMapMetric] = useState<'speed' | 'tti'>('tti');
+  const [mapDirection, setMapDirection] = useState<'all' | 'l' | 's' | 'r'>('all');
+  const [isMapDarkMode, setIsMapDarkMode] = useState<boolean>(true);
+  const [showRawPoints, setShowRawPoints] = useState<boolean>(false);
+  
+  useEffect(() => {
+    if (activeTab === 'map' && results.length > 0 && (!mapDate || !mapTimeSlot)) {
+      setMapDate(results[0].date);
+      setMapTimeSlot(results[0].timeSlot);
+    }
+  }, [activeTab, results, mapDate, mapTimeSlot]);
 
   // Configuration
   const [options, setOptions] = useState<ProcessingOptions>({
@@ -81,6 +102,9 @@ export default function App() {
     setProbeFiles([]);
     setNetFile(null);
     setResults([]);
+    setProbePoints([]);
+    setMapDate('');
+    setMapTimeSlot('');
     setError(null);
   };
 
@@ -96,7 +120,8 @@ export default function App() {
     try {
       // 1. Read SUMO Network
       const netText = await netFile.text();
-      const network = new SumoNetwork(netText);
+      const loadedNetwork = new SumoNetwork(netText);
+      setNetwork(loadedNetwork);
 
       // 2. Read all Probe Data files
       const allProbeData: ProbePoint[] = [];
@@ -126,7 +151,10 @@ export default function App() {
                   forHireLight: Number(row[7]),
                   engineAcc: Number(row[8]),
                 };
-              });
+              }).filter((p: any) => 
+                !isNaN(p.lat) && !isNaN(p.lon) && 
+                loadedNetwork.isWithinBounds(p.lat, p.lon)
+              );
               resolve(data);
             },
             error: (err) => reject(err),
@@ -138,10 +166,23 @@ export default function App() {
       }
 
       // 3. Process
-      const processor = new TrafficProcessor(network);
+      const processor = new TrafficProcessor(loadedNetwork);
       const processedResults = processor.process(allProbeData, options);
 
+      // Final sorting to ensure UI is consistent
+      processedResults.sort((a, b) => a.date.localeCompare(b.date) || a.timeSlot.localeCompare(b.timeSlot));
+
       setResults(processedResults);
+      setProbePoints(allProbeData);
+      
+      // Force pick the first date from NEW results
+      if (processedResults.length > 0) {
+        setMapDate(processedResults[0].date);
+        setMapTimeSlot(processedResults[0].timeSlot);
+      } else {
+        setMapDate('');
+        setMapTimeSlot('');
+      }
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'An error occurred during processing.');
@@ -163,6 +204,12 @@ export default function App() {
     link.click();
     document.body.removeChild(link);
   };
+
+  // Derived
+  const transformer = useMemo(() => {
+    if (!network) return null;
+    return new TrafficProcessor(network).getTransformer();
+  }, [network]);
 
   // Chart Data
   const chartData = useMemo(() => {
@@ -577,6 +624,17 @@ export default function App() {
                     >
                       <AlertCircle className="w-4 h-4" /> TTI Analysis
                     </button>
+                    <button
+                      onClick={() => setActiveTab('map')}
+                      className={cn(
+                        'px-6 py-4 text-sm font-bold flex items-center gap-2 transition-all border-b-2',
+                        activeTab === 'map'
+                          ? 'text-indigo-600 border-indigo-600 bg-white'
+                          : 'text-slate-400 border-transparent hover:text-slate-600'
+                      )}
+                    >
+                      <MapIcon className="w-4 h-4" /> Map View
+                    </button>
                   </div>
 
                   <div className="p-6">
@@ -681,6 +739,46 @@ export default function App() {
                           </div>
                         )}
                       </div>
+                    ) : activeTab === 'chart' ? (
+                      <div className="h-[400px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                            <XAxis
+                              dataKey="time"
+                              axisLine={false}
+                              tickLine={false}
+                              tick={{ fill: '#94a3b8', fontSize: 10 }}
+                              dy={10}
+                              interval="preserveStartEnd"
+                            />
+                            <YAxis
+                              axisLine={false}
+                              tickLine={false}
+                              tick={{ fill: '#94a3b8', fontSize: 12 }}
+                              label={{
+                                value: 'Avg. Harmonic Speed (km/h)',
+                                angle: -90,
+                                position: 'insideLeft',
+                                fill: '#94a3b8',
+                                fontSize: 12,
+                              }}
+                            />
+                            <Tooltip
+                              contentStyle={{
+                                borderRadius: '12px',
+                                border: 'none',
+                                boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
+                              }}
+                            />
+                            <Legend verticalAlign="top" align="right" height={36} />
+                            <Bar dataKey="Overall" fill="#64748b" radius={[4, 4, 0, 0]} name="Overall Avg" />
+                            <Bar dataKey="Left" fill="#6366f1" radius={[4, 4, 0, 0]} name="Left Turn" />
+                            <Bar dataKey="Through" fill="#10b981" radius={[4, 4, 0, 0]} name="Through" />
+                            <Bar dataKey="Right" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Right Turn" />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
                     ) : activeTab === 'tti' ? (
                       <div className="w-full">
                         <div className="h-[400px]">
@@ -741,65 +839,160 @@ export default function App() {
                           </div>
                         </div>
                       </div>
+                    ) : activeTab === 'map' ? (
+                      <div className="space-y-6">
+                        <div className="flex flex-wrap items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase">Analysis Date</label>
+                            <select
+                              value={mapDate}
+                              onChange={(e) => setMapDate(e.target.value)}
+                              className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                            >
+                              {Array.from(new Set(results.map(r => r.date))).sort().map(d => (
+                                <option key={d} value={d}>{d}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase">Time Slot</label>
+                            <select
+                              value={mapTimeSlot}
+                              onChange={(e) => setMapTimeSlot(e.target.value)}
+                              className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                            >
+                              {Array.from(new Set(results.filter(r => r.date === mapDate).map(r => r.timeSlot))).sort().map(ts => (
+                                <option key={ts} value={ts}>{ts}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase">Visualization Metric</label>
+                            <div className="flex bg-white border border-slate-200 rounded-lg p-0.5">
+                              <button
+                                onClick={() => setMapMetric('speed')}
+                                className={cn(
+                                  "px-3 py-1 rounded-md text-xs font-bold transition-all",
+                                  mapMetric === 'speed' ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"
+                                )}
+                              >
+                                Speed
+                              </button>
+                              <button
+                                onClick={() => setMapMetric('tti')}
+                                className={cn(
+                                  "px-3 py-1 rounded-md text-xs font-bold transition-all",
+                                  mapMetric === 'tti' ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"
+                                )}
+                              >
+                                TTI
+                              </button>
+                            </div>
+                          </div>
+                          
+                          {mapMetric === 'speed' && (
+                            <div className="flex flex-col gap-1">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase">Direction</label>
+                              <div className="flex bg-white border border-slate-200 rounded-lg p-0.5">
+                                <button
+                                  onClick={() => setMapDirection('all')}
+                                  className={cn(
+                                    "px-2 py-1 rounded-md text-[10px] font-bold transition-all",
+                                    mapDirection === 'all' ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"
+                                  )}
+                                >
+                                  All
+                                </button>
+                                <button
+                                  onClick={() => setMapDirection('s')}
+                                  className={cn(
+                                    "px-2 py-1 rounded-md text-[10px] font-bold transition-all",
+                                    mapDirection === 's' ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"
+                                  )}
+                                >
+                                  Straight
+                                </button>
+                                <button
+                                  onClick={() => setMapDirection('l')}
+                                  className={cn(
+                                    "px-2 py-1 rounded-md text-[10px] font-bold transition-all",
+                                    mapDirection === 'l' ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"
+                                  )}
+                                >
+                                  Left
+                                </button>
+                                <button
+                                  onClick={() => setMapDirection('r')}
+                                  className={cn(
+                                    "px-2 py-1 rounded-md text-[10px] font-bold transition-all",
+                                    mapDirection === 'r' ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"
+                                  )}
+                                >
+                                  Right
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase">Map Style</label>
+                            <button
+                              onClick={() => setIsMapDarkMode(!isMapDarkMode)}
+                              className={cn(
+                                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all",
+                                isMapDarkMode 
+                                  ? "bg-slate-800 text-slate-100 border-slate-700 hover:bg-slate-700" 
+                                  : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                              )}
+                            >
+                              {isMapDarkMode ? (
+                                <><Moon className="w-3 h-3" /> Dark</>
+                              ) : (
+                                <><Sun className="w-3 h-3" /> Light</>
+                              )}
+                            </button>
+                          </div>
+
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase">Verification</label>
+                            <button
+                              onClick={() => setShowRawPoints(!showRawPoints)}
+                              className={cn(
+                                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all",
+                                showRawPoints 
+                                  ? "bg-amber-100 text-amber-700 border-amber-300" 
+                                  : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+                              )}
+                            >
+                              <Zap className={cn("w-3 h-3", showRawPoints ? "fill-amber-500 text-amber-500" : "text-slate-400")} />
+                              GPS Points
+                            </button>
+                          </div>
+
+                          <div className="ml-auto text-[10px] text-slate-400 italic">
+                            Click on links for detailed info
+                          </div>
+                        </div>
+
+                        {network && transformer && (
+                          <MapView
+                            network={network}
+                            results={results}
+                            probePoints={probePoints}
+                            transformer={transformer}
+                            selectedDate={mapDate}
+                            selectedTimeSlot={mapTimeSlot}
+                            timeBinSize={options.timeBinSize}
+                            metric={mapMetric}
+                            direction={mapDirection}
+                            isDarkMode={isMapDarkMode}
+                            showRawPoints={showRawPoints}
+                          />
+                        )}
+                      </div>
                     ) : (
-                      <div className="h-[400px] w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={chartData}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                            <XAxis
-                              dataKey="time"
-                              axisLine={false}
-                              tickLine={false}
-                              tick={{ fill: '#94a3b8', fontSize: 10 }}
-                              dy={10}
-                              interval="preserveStartEnd"
-                            />
-                            <YAxis
-                              axisLine={false}
-                              tickLine={false}
-                              tick={{ fill: '#94a3b8', fontSize: 12 }}
-                              label={{
-                                value: 'Avg. Harmonic Speed (km/h)',
-                                angle: -90,
-                                position: 'insideLeft',
-                                fill: '#94a3b8',
-                                fontSize: 12,
-                              }}
-                            />
-                            <Tooltip
-                              contentStyle={{
-                                borderRadius: '12px',
-                                border: 'none',
-                                boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
-                              }}
-                            />
-                            <Legend verticalAlign="top" align="right" height={36} />
-                            <Bar
-                              dataKey="Overall"
-                              fill="#64748b"
-                              radius={[4, 4, 0, 0]}
-                              name="Overall Avg"
-                            />
-                            <Bar
-                              dataKey="Left"
-                              fill="#6366f1"
-                              radius={[4, 4, 0, 0]}
-                              name="Left Turn"
-                            />
-                            <Bar
-                              dataKey="Through"
-                              fill="#10b981"
-                              radius={[4, 4, 0, 0]}
-                              name="Through"
-                            />
-                            <Bar
-                              dataKey="Right"
-                              fill="#f59e0b"
-                              radius={[4, 4, 0, 0]}
-                              name="Right Turn"
-                            />
-                          </BarChart>
-                        </ResponsiveContainer>
+                      <div className="h-full flex items-center justify-center p-20 text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
+                        Select a tab to visualize results
                       </div>
                     )}
                   </div>

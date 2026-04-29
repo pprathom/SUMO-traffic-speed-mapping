@@ -21,6 +21,26 @@ export class SumoNetwork {
   public metadata: NetworkMetadata | null = null;
   private rtree: RBush<SpatialItem> = new RBush();
 
+  /**
+   * Checks if a WGS84 point is within the geographic boundaries of the network
+   */
+  isWithinBounds(lat: number, lon: number): boolean {
+    if (!this.metadata?.location?.origBoundary) return true;
+    const [minLon, minLat, maxLon, maxLat] = this.metadata.location.origBoundary;
+    
+    // If boundaries are all zeros, assume no boundary information is available
+    if (minLon === 0 && minLat === 0 && maxLon === 0 && maxLat === 0) return true;
+    
+    // Add a small buffer (e.g., 0.001 degrees ~ 100m) to ensure we don't cut off points right on the edge
+    const buffer = 0.001;
+    return (
+      lon >= minLon - buffer &&
+      lon <= maxLon + buffer &&
+      lat >= minLat - buffer &&
+      lat <= maxLat + buffer
+    );
+  }
+
   constructor(xmlContent: string) {
     const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '' });
     const jsonObj = parser.parse(xmlContent);
